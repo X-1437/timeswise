@@ -146,6 +146,8 @@ const logout = () => {
   localStorage.removeItem('isLoggedIn')
   localStorage.removeItem('username')
   localStorage.removeItem('avatar')
+  localStorage.removeItem('token')
+  localStorage.removeItem('currentProjectId')
   router.push('/')
 }
 </script>

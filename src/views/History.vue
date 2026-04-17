@@ -12,7 +12,12 @@
           <p class="text-slate-500 dark:text-slate-400 mt-2">查看您过往的时间序列分析记录</p>
         </div>
         
-        <div v-if="historyRecords.length > 0" class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+        <div v-if="loading" class="text-center py-12">
+          <span class="material-symbols-outlined text-4xl animate-spin text-primary">sync</span>
+          <p class="mt-4 text-slate-500">加载中...</p>
+        </div>
+        
+        <div v-else-if="historyRecords.length > 0" class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
             <div class="flex items-center gap-4">
               <div class="relative">
@@ -95,17 +100,6 @@
         </div>
       </div>
     </div>
-    
-    <ConfirmDialog 
-      v-model="showRestoreConfirm" 
-      @confirm="confirmRestore" 
-      @cancel="cancelRestore"
-      title="恢复进度"
-      :message="'确定要恢复到「' + (recordToRestore?.name || '') + '」吗？当前未保存的进度将会丢失。'"
-      confirmText="恢复"
-      cancelText="取消"
-      icon="restore"
-    />
   </MainLayout>
 </template>
 
@@ -113,14 +107,27 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import MainLayout from '../layouts/MainLayout.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
+import api from '../api/index'
 
 const router = useRouter()
 
-const historyRecords = ref([])
+const projects = ref([])
+const loading = ref(true)
 const searchKeyword = ref('')
 const showRestoreConfirm = ref(false)
 const recordToRestore = ref(null)
+
+const historyRecords = computed(() => {
+  return projects.value.map(project => ({
+    id: project.id,
+    name: project.name,
+    time: project.updated_at ? new Date(project.updated_at).toLocaleString('zh-CN') : '',
+    currentStep: getStepNumber(project.status),
+    status: project.status === 'completed' ? '已完成' : '进行中',
+    statusClass: project.status === 'completed' ? 'completed' : 'in_progress',
+    project: project
+  }))
+})
 
 const filteredRecords = computed(() => {
   if (!searchKeyword.value) {
@@ -132,45 +139,73 @@ const filteredRecords = computed(() => {
   )
 })
 
-const loadHistory = () => {
-  const records = JSON.parse(localStorage.getItem('historyRecords') || '[]')
-  historyRecords.value = records.map(record => ({
-    ...record,
-    statusClass: getStatusClass(record.status)
-  }))
-}
-
-const getStatusClass = (status) => {
-  switch(status) {
-    case '已完成':
-      return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-    case '进行中':
-      return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-    case '失败':
-      return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-    default:
-      return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+const loadHistory = async () => {
+  loading.value = true
+  try {
+    const response = await api.get('/projects')
+    projects.value = response.data.items || []
+  } catch (error) {
+    console.error('加载项目失败:', error)
+  } finally {
+    loading.value = false
   }
 }
 
+const getStepNumber = (status) => {
+  const statusMap = {
+    'draft': 1,
+    'data_config': 2,
+    'eda': 3,
+    'preprocessing': 4,
+    'feature': 5,
+    'feature_engineering': 5,
+    'forecast': 6,
+    'forecasting': 6,
+    'completed': 7
+  }
+  return statusMap[status] || 1
+}
+
+const getStatusClass = (status) => {
+  if (status === 'completed' || status === '已完成') {
+    return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+  } else if (status === 'in_progress' || status === '进行中') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+  } else if (status === 'failed' || status === '失败') {
+    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+  }
+  return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+}
+
 const getStepName = (step) => {
-  const steps = ['未开始', '数据接入', 'EDA', '预处理', '特征工程', '朴素预测', '报告导出']
+  const steps = ['未开始', '数据接入', 'EDA', '预处理', '特征工程', '频域特征', '朴素预测', '报告导出']
   return steps[step] || '未知'
 }
 
 const restoreRecord = (record) => {
-  recordToRestore.value = record
-  showRestoreConfirm.value = true
+  if (record.status === '已完成') {
+    router.push('/export')
+  } else {
+    const lastPage = localStorage.getItem('lastPage')
+    
+    const stepRoutes = {
+      1: '/data-import',
+      2: '/data-import',
+      3: '/eda',
+      4: lastPage || '/preprocessing',
+      5: lastPage || '/feature-engineering/time',
+      6: '/forecasting',
+      7: '/export'
+    }
+    
+    let route = stepRoutes[record.currentStep] || lastPage || '/data-import'
+    
+    localStorage.setItem('currentProjectId', record.id)
+    router.push(route)
+  }
 }
 
 const confirmRestore = () => {
-  if (recordToRestore.value && recordToRestore.value.data) {
-    localStorage.setItem('projectData', JSON.stringify(recordToRestore.value.data))
-    
-    const stepRoutes = ['/', '/data-import', '/eda', '/preprocessing', '/feature-engineering', '/forecasting', '/export']
-    const route = stepRoutes[recordToRestore.value.currentStep] || '/data-import'
-    router.push(route)
-  }
   showRestoreConfirm.value = false
   recordToRestore.value = null
 }
@@ -180,9 +215,16 @@ const cancelRestore = () => {
   recordToRestore.value = null
 }
 
-const deleteRecord = (id) => {
-  historyRecords.value = historyRecords.value.filter(record => record.id !== id)
-  localStorage.setItem('historyRecords', JSON.stringify(historyRecords.value))
+const deleteRecord = async (id) => {
+  if (!confirm('确定要删除这个项目吗？')) return
+  
+  try {
+    await api.delete(`/projects/${id}`)
+    projects.value = projects.value.filter(p => p.id !== id)
+  } catch (error) {
+    console.error('删除项目失败:', error)
+    alert('删除项目失败，请稍后重试')
+  }
 }
 
 onMounted(() => {

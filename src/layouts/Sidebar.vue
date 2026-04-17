@@ -139,7 +139,10 @@ const steps = [
   { name: '数据接入', path: '/data-import' },
   { name: 'EDA', path: '/eda' },
   { name: '预处理', path: '/preprocessing' },
-  { name: '特征工程', path: '/feature-engineering' },
+  { name: '特征工程', path: '/feature-engineering', children: [
+    { name: '时域特征', path: '/feature-engineering/time' },
+    { name: '频域特征', path: '/feature-engineering/freq' }
+  ]},
   { name: '朴素预测', path: '/forecasting' },
   { name: '报告导出', path: '/export' }
 ]

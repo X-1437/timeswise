@@ -4,7 +4,7 @@
       <div class="max-w-7xl mx-auto">
         <div class="mb-8">
           <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-4">
-            <a class="hover:text-primary transition-colors cursor-pointer" @click="$router.push('/')">首页</a>
+            <a class="hover:text-primary transition-colors cursor-pointer" @click="$router.push('/dashboard')">项目中心</a>
             <span class="material-symbols-outlined text-xs">chevron_right</span>
             <span class="text-slate-900 dark:text-slate-100 font-medium">数据接入</span>
           </nav>
@@ -24,14 +24,16 @@
               
               <div 
                 class="flex-1 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-4 text-center hover:border-primary transition-colors cursor-pointer group bg-slate-50 dark:bg-slate-800/50 flex flex-col items-center justify-center"
-                @click="triggerFileInput"
+                :class="uploading ? 'opacity-50 cursor-not-allowed' : ''"
+                @click="!uploading && triggerFileInput()"
                 @dragover.prevent
-                @drop.prevent="handleDrop"
+                @drop.prevent="!uploading && handleDrop"
               >
-                <input type="file" ref="fileInput" class="hidden" @change="handleFileChange" accept=".csv" />
-                <span class="material-symbols-outlined text-4xl text-slate-400 group-hover:text-primary transition-colors mb-2">upload_file</span>
+                <input type="file" ref="fileInput" class="hidden" @change="handleFileChange" accept=".csv,.xlsx,.xls" />
+                <span v-if="uploading" class="material-symbols-outlined text-4xl text-primary animate-spin mb-2">sync</span>
+                <span v-else class="material-symbols-outlined text-4xl text-slate-400 group-hover:text-primary transition-colors mb-2">upload_file</span>
                 <p class="text-sm font-medium text-slate-900 dark:text-white mb-1">{{ fileName || '点击或拖拽文件到此处' }}</p>
-                <p class="text-xs text-slate-500">支持 CSV 格式</p>
+                <p class="text-xs text-slate-500">支持 CSV、Excel 格式</p>
               </div>
               
               <div class="space-y-4 mt-4">
@@ -40,7 +42,7 @@
                   <div class="relative">
                     <select v-model="selectedTimeCol" :disabled="!hasData" class="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg py-2 pl-3 pr-10 text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none appearance-none disabled:opacity-50">
                       <option value="">请选择列...</option>
-                      <option v-for="col in detectedColumns" :key="col.value" :value="col.value">{{ col.label }}</option>
+                      <option v-for="col in detectedColumns" :key="col.value" :value="col.value">{{ col.label }} {{ col.isTime ? '(时间列)' : '' }}</option>
                     </select>
                     <span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">expand_more</span>
                   </div>
@@ -102,6 +104,13 @@
                 </div>
               </div>
               
+              <div v-else-if="loadingPreview" class="flex-1 flex items-center justify-center">
+                <div class="text-center">
+                  <span class="material-symbols-outlined text-4xl animate-spin text-primary mb-2">sync</span>
+                  <p class="text-slate-500">加载数据中...</p>
+                </div>
+              </div>
+              
               <div v-else class="overflow-x-auto flex-1">
                 <table class="w-full text-left border-collapse">
                   <thead>
@@ -152,10 +161,10 @@
           </button>
           <button 
             @click="loadData"
-            :disabled="!hasData || !selectedTimeCol || !selectedTargetCol"
+            :disabled="!hasData || !selectedTimeCol || !selectedTargetCol || saving"
             class="px-8 py-2 bg-primary text-white rounded-lg font-semibold shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            加载数据
+            {{ saving ? '保存中...' : '加载数据' }}
           </button>
         </div>
       </div>
@@ -179,6 +188,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import MainLayout from '../layouts/MainLayout.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import api from '../api/index'
 
 const router = useRouter()
 
@@ -195,21 +205,50 @@ const searchKeyword = ref('')
 const currentPage = ref(1)
 const pageSize = 10
 const showConfirmDialog = ref(false)
+const uploading = ref(false)
+const saving = ref(false)
+const loadingPreview = ref(false)
 
-onMounted(() => {
-  const savedData = localStorage.getItem('projectData')
-  if (savedData) {
-    const data = JSON.parse(savedData)
-    fileName.value = data.fileName || ''
-    selectedTimeCol.value = data.timeCol || ''
-    selectedTargetCol.value = data.targetCol || ''
-    tableHeaders.value = data.headers || []
-    allData.value = data.data || []
-    detectedColumns.value = detectTimeColumns(tableHeaders.value)
-    hasData.value = allData.value.length > 0
-    currentPage.value = 1
+onMounted(async () => {
+  let projectId = localStorage.getItem('currentProjectId')
+  console.log('currentProjectId:', projectId)
+  
+  if (!projectId) {
+    try {
+      const response = await api.post('/projects', {
+        name: `项目 ${new Date().toLocaleString('zh-CN')}`
+      })
+      projectId = response.data.id
+      localStorage.setItem('currentProjectId', projectId)
+      console.log('Created new project:', projectId)
+    } catch (error) {
+      console.error('创建项目失败:', error)
+    }
+  }
+  
+  if (projectId) {
+    await loadProjectData(projectId)
   }
 })
+
+const loadProjectData = async (projectId) => {
+  try {
+    const response = await api.get(`/projects/${projectId}`)
+    const project = response.data
+    
+    if (project.data_config) {
+      selectedTimeCol.value = project.data_config.time_column || ''
+      selectedTargetCol.value = project.data_config.target_column || ''
+    }
+    
+    if (project.data_file) {
+      fileName.value = project.data_file.filename || ''
+      await loadColumns(projectId)
+    }
+  } catch (error) {
+    console.error('加载项目数据失败:', error)
+  }
+}
 
 const targetColumnOptions = computed(() => {
   return detectedColumns.value.filter(col => col.value !== selectedTimeCol.value)
@@ -239,97 +278,127 @@ const triggerFileInput = () => {
   fileInput.value?.click()
 }
 
-const parseCSV = (text) => {
-  const lines = text.trim().split('\n')
-  if (lines.length < 2) return { headers: [], rows: [] }
-  
-  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
-  
-  const rows = []
-  for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''))
-    rows.push(values)
-  }
-  
-  return { headers, rows }
-}
-
-const detectTimeColumns = (headers) => {
-  const timeKeywords = ['time', 'date', 'datetime', 'timestamp', '时间', '日期', '时间戳']
-  return headers.map(h => ({
-    value: h,
-    label: h,
-    isTime: timeKeywords.some(kw => h.toLowerCase().includes(kw))
-  })).sort((a, b) => b.isTime - a.isTime)
-}
-
-const handleFileChange = (event) => {
+const handleFileChange = async (event) => {
   const file = event.target.files[0]
   if (file) {
-    fileName.value = file.name
-    parseCSVFile(file)
+    await uploadFile(file)
   }
 }
 
-const handleDrop = (event) => {
+const handleDrop = async (event) => {
   const file = event.dataTransfer.files[0]
   if (file) {
-    fileName.value = file.name
-    parseCSVFile(file)
+    await uploadFile(file)
   }
 }
 
-const parseCSVFile = (file) => {
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    const text = e.target.result
-    const { headers, rows } = parseCSV(text)
+const uploadFile = async (file) => {
+  const projectId = localStorage.getItem('currentProjectId')
+  if (!projectId) {
+    alert('请先创建项目')
+    return
+  }
+  
+  uploading.value = true
+  fileName.value = file.name
+  
+  const formData = new FormData()
+  formData.append('file', file)
+  
+  try {
+    await api.post(`/projects/${projectId}/upload`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
     
-    if (headers.length > 0) {
-      tableHeaders.value = headers
-      allData.value = rows
-      detectedColumns.value = detectTimeColumns(headers)
-      hasData.value = true
-      currentPage.value = 1
-      
-      const timeCol = detectedColumns.value.find(c => c.isTime)
-      if (timeCol) {
-        selectedTimeCol.value = timeCol.value
-      }
-      
-      const targetCol = detectedColumns.value.find(c => c.value !== selectedTimeCol.value)
-      if (targetCol) {
-        selectedTargetCol.value = targetCol.value
-      }
-    }
+    await loadColumns(projectId)
+    
+  } catch (error) {
+    console.error('上传文件失败:', error)
+    alert('上传失败，请稍后重试')
+    fileName.value = ''
+  } finally {
+    uploading.value = false
   }
-  reader.readAsText(file)
 }
 
-const loadData = () => {
-  const projectData = {
-    fileName: fileName.value,
-    timeCol: selectedTimeCol.value,
-    targetCol: selectedTargetCol.value,
-    headers: tableHeaders.value,
-    data: allData.value
+const loadColumns = async (projectId) => {
+  loadingPreview.value = true
+  
+  try {
+    const response = await api.get(`/projects/${projectId}/columns`)
+    const columns = response.data.columns || []
+    
+    const timeKeywords = ['time', 'date', 'datetime', 'timestamp', '时间', '日期', '时间戳']
+    
+    detectedColumns.value = columns.map(col => ({
+      value: col.name,
+      label: col.name,
+      isTime: timeKeywords.some(kw => col.name.toLowerCase().includes(kw))
+    })).sort((a, b) => b.isTime - a.isTime)
+    
+    tableHeaders.value = columns.map(col => col.name)
+    
+    const responseData = await api.get(`/projects/${projectId}/data?page=1&page_size=100`)
+    allData.value = responseData.data.data || []
+    
+    hasData.value = true
+    currentPage.value = 1
+    
+    const timeCol = detectedColumns.value.find(c => c.isTime)
+    if (timeCol) {
+      selectedTimeCol.value = timeCol.value
+    }
+    
+    const targetCol = detectedColumns.value.find(c => c.value !== selectedTimeCol.value)
+    if (targetCol) {
+      selectedTargetCol.value = targetCol.value
+    }
+    
+  } catch (error) {
+    console.error('加载列信息失败:', error)
+  } finally {
+    loadingPreview.value = false
   }
-  localStorage.setItem('projectData', JSON.stringify(projectData))
-  router.push('/eda')
+}
+
+const loadData = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  if (!projectId) {
+    alert('请先创建项目')
+    return
+  }
+  
+  saving.value = true
+  
+  try {
+    await api.post(`/projects/${projectId}/data/configure`, {
+      time_column: selectedTimeCol.value,
+      target_column: selectedTargetCol.value
+    })
+    
+    router.push('/eda')
+  } catch (error) {
+    console.error('保存配置失败:', error)
+    alert('保存失败，请稍后重试')
+  } finally {
+    saving.value = false
+  }
 }
 
 const handleCancel = () => {
   if (hasData.value) {
     showConfirmDialog.value = true
   } else {
-    router.push('/')
+    router.push('/dashboard')
   }
 }
 
 const goHome = () => {
   showConfirmDialog.value = false
   resetState()
-  router.push('/')
+  router.push('/dashboard')
 }
 
 const resetState = () => {
@@ -343,34 +412,26 @@ const resetState = () => {
   currentPage.value = 1
   searchKeyword.value = ''
   localStorage.removeItem('projectData')
+  localStorage.removeItem('currentProjectId')
 }
 
-const confirmCancel = () => {
-  const dataToSave = {
-    fileName: fileName.value,
-    timeCol: selectedTimeCol.value,
-    targetCol: selectedTargetCol.value,
-    headers: tableHeaders.value,
-    data: allData.value,
-    currentStep: 1
-  }
+const confirmCancel = async () => {
+  saving.value = true
   
-  const history = JSON.parse(localStorage.getItem('historyRecords') || '[]')
-  const newRecord = {
-    id: Date.now(),
-    name: dataToSave.fileName || '未命名项目',
-    time: new Date().toLocaleString('zh-CN'),
-    type: '数据分析',
-    status: '进行中',
-    data: dataToSave,
-    currentStep: 1
+  try {
+    const projectId = localStorage.getItem('currentProjectId')
+    if (projectId) {
+      await api.patch(`/projects/${projectId}`, {
+        status: 'draft'
+      })
+    }
+  } catch (error) {
+    console.error('保存状态失败:', error)
   }
-  history.unshift(newRecord)
-  localStorage.setItem('historyRecords', JSON.stringify(history))
   
   showConfirmDialog.value = false
   resetState()
-  router.push('/')
+  router.push('/dashboard')
 }
 
 const prevPage = () => {

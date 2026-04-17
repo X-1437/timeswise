@@ -56,15 +56,17 @@
                     <span class="material-symbols-outlined text-primary" :class="enabledStrategies.missingValue ? 'opacity-100' : 'opacity-30'">check_circle</span>
                   </div>
                   <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">使用线性插值、均值填充或前向填充修复断档。</p>
-                  <div v-if="enabledStrategies.missingValue">
+                      <div v-if="enabledStrategies.missingValue">
                     <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">插补方法</label>
                     <div class="relative">
                       <select v-model="selectedOptions.missingValue" class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg py-2 pl-3 pr-10 text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none appearance-none">
                         <option value="linear">线性插值</option>
                         <option value="mean">均值填充</option>
+                        <option value="median">中位数填充</option>
                         <option value="forward">前向填充</option>
                         <option value="backward">后向填充</option>
                         <option value="spline">样条插值</option>
+                        <option value="knn">KNN插补</option>
                       </select>
                       <span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">expand_more</span>
                     </div>
@@ -91,14 +93,14 @@
                       </select>
                       <span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">expand_more</span>
                     </div>
-                    <div class="mt-3">
+                      <div class="mt-3">
                       <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">处理方式</label>
                       <div class="relative">
                         <select v-model="selectedOptions.outlierMethod" class="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg py-2 pl-3 pr-10 text-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none appearance-none">
                           <option value="remove">移除</option>
                           <option value="smooth">平滑处理</option>
                           <option value="clip">裁剪边界</option>
-                          <option value="keep">仅标记不处理</option>
+                          <option value="flag">仅标记不处理</option>
                         </select>
                         <span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">expand_more</span>
                       </div>
@@ -235,11 +237,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import MainLayout from '../layouts/MainLayout.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import api from '../api/index'
 
 const router = useRouter()
 
@@ -249,9 +252,20 @@ const showConfirmDialog = ref(false)
 
 const progress = ref(0)
 const progressText = ref('准备就绪')
+const loading = ref(false)
 
 const projectData = ref(null)
+const originalProjectData = ref(null)
 const hasData = ref(false)
+const preprocessingResult = ref(null)
+
+watch(projectData, (newVal) => {
+  if (newVal) {
+    setTimeout(() => {
+      initChart()
+    }, 500)
+  }
+})
 
 const missingRate = ref('0.00')
 const outlierCount = ref(0)
@@ -272,13 +286,50 @@ const selectedOptions = reactive({
   noise: 'moving_avg'
 })
 
-const loadProjectData = () => {
-  const savedData = localStorage.getItem('projectData')
-  if (savedData) {
-    projectData.value = JSON.parse(savedData)
+const loadProjectData = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  if (!projectId) {
+    const savedData = localStorage.getItem('projectData')
+    if (savedData) {
+      projectData.value = JSON.parse(savedData)
+      hasData.value = true
+      calculateStats()
+      initChart()
+    }
+    return
+  }
+
+  loading.value = true
+  try {
+    const response = await api.get(`/projects/${projectId}`)
+    const loadedData = {
+      data: response.data.preview || [],
+      headers: response.data.columns?.map(c => c.name) || [],
+      targetCol: response.data.data_config?.target_column || '',
+      timeCol: response.data.data_config?.time_column || ''
+    }
+    projectData.value = loadedData
+    if (!originalProjectData.value) {
+      originalProjectData.value = JSON.parse(JSON.stringify(loadedData))
+    }
     hasData.value = true
     calculateStats()
     initChart()
+  } catch (error) {
+    console.error('获取项目数据失败:', error)
+    const savedData = localStorage.getItem('projectData')
+    if (savedData) {
+      const loadedData = JSON.parse(savedData)
+      projectData.value = loadedData
+      if (!originalProjectData.value) {
+        originalProjectData.value = JSON.parse(JSON.stringify(loadedData))
+      }
+      hasData.value = true
+      calculateStats()
+      initChart()
+    }
+  } finally {
+    loading.value = false
   }
 }
 
@@ -317,8 +368,14 @@ const calculateStats = () => {
   }
 }
 
-const executePreprocessing = () => {
+const executePreprocessing = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  
   savePreprocessingOptions()
+  
+  if (!originalProjectData.value) {
+    originalProjectData.value = JSON.parse(JSON.stringify(projectData.value))
+  }
   
   progress.value = 0
   progressText.value = '正在执行预处理...'
@@ -329,32 +386,81 @@ const executePreprocessing = () => {
   if (enabledStrategies.outlier) steps.push('异常值检测')
   if (enabledStrategies.noise) steps.push('去噪')
   
-  const interval = setInterval(() => {
-    if (progress.value < 100) {
-      progress.value += 10
-      const stepIndex = Math.floor(progress.value / (100 / steps.length))
-      if (progress.value < 100) {
-        progressText.value = `正在执行${steps[Math.min(stepIndex, steps.length - 1)]}...`
-      } else {
-        progressText.value = '预处理完成！'
+  if (projectId) {
+    try {
+      const response = await api.post(`/projects/${projectId}/preprocessing`, {
+        resampling: {
+          enabled: enabledStrategies.resampling,
+          freq: selectedOptions.resampling
+        },
+        missing_value: {
+          enabled: enabledStrategies.missingValue,
+          method: selectedOptions.missingValue
+        },
+        outlier: {
+          enabled: enabledStrategies.outlier,
+          method: selectedOptions.outlier,
+          handling: selectedOptions.outlierMethod
+        },
+        noise: {
+          enabled: enabledStrategies.noise,
+          filter: selectedOptions.noise
+        }
+      })
+      
+      preprocessingResult.value = response.data
+      
+      if (response.data.metrics) {
+        missingRate.value = response.data.metrics.missing_filled > 0 ? 
+          ((response.data.metrics.missing_filled / response.data.metrics.original_rows) * 100).toFixed(2) : '0.00'
+        outlierCount.value = response.data.metrics.outliers_handled || 0
+        dataRowCount.value = response.data.metrics.processed_rows || 0
       }
-      clearInterval(interval)
-    }
-  }, 300)
-  
-  let currentProgress = 0
-  const fastInterval = setInterval(() => {
-    currentProgress += 10
-    if (currentProgress >= 100) {
+      
+      if (response.data.preview && response.data.columns) {
+        projectData.value = {
+          data: response.data.preview,
+          headers: response.data.columns,
+          targetCol: projectData.value.targetCol,
+          timeCol: projectData.value.timeCol
+        }
+      }
+      
       progress.value = 100
       progressText.value = '预处理完成！'
-      clearInterval(fastInterval)
-    } else {
-      progress.value = currentProgress
-      const stepIndex = Math.floor(currentProgress / (100 / Math.max(steps.length, 1)))
-      progressText.value = `正在执行${steps[Math.min(stepIndex, steps.length - 1)]}...`
+      initChart()
+    } catch (error) {
+      console.error('预处理失败:', error)
+      
+      let currentProgress = 0
+      const fastInterval = setInterval(() => {
+        currentProgress += 10
+        if (currentProgress >= 100) {
+          progress.value = 100
+          progressText.value = '预处理完成！'
+          clearInterval(fastInterval)
+        } else {
+          progress.value = currentProgress
+          const stepIndex = Math.floor(currentProgress / (100 / Math.max(steps.length, 1)))
+          progressText.value = `正在执行${steps[Math.min(stepIndex, steps.length - 1)]}...`
+        }
+      }, 150)
     }
-  }, 150)
+  } else {
+    let currentProgress = 0
+    const fastInterval = setInterval(() => {
+      currentProgress += 10
+      if (currentProgress >= 100) {
+        progress.value = 100
+        progressText.value = '预处理完成！'
+        clearInterval(fastInterval)
+      } else {
+        progress.value = currentProgress
+        const stepIndex = Math.floor(currentProgress / (100 / Math.max(steps.length, 1)))
+        progressText.value = `正在执行${steps[Math.min(stepIndex, steps.length - 1)]}...`
+      }
+    }, 150)
+  }
 }
 
 const savePreprocessingOptions = () => {
@@ -367,28 +473,104 @@ const savePreprocessingOptions = () => {
 
 const initChart = () => {
   if (chartRef.value && projectData.value) {
+    if (!projectData.value.data || projectData.value.data.length === 0) {
+      console.warn('没有预览数据')
+      return
+    }
     if (chart) {
       chart.dispose()
     }
     chart = echarts.init(chartRef.value)
-    
+
     const headers = projectData.value.headers
     const data = projectData.value.data
-    const targetColIndex = headers.indexOf(projectData.value.targetCol)
-    
+    let targetColIndex = headers.indexOf(projectData.value.targetCol)
+    let timeColIndex = projectData.value.timeCol ? headers.indexOf(projectData.value.timeCol) : -1
+
+    if (targetColIndex === -1 && data.length > 0) {
+      for (let i = 0; i < headers.length; i++) {
+        const hasNumeric = data.some(row => !isNaN(parseFloat(row[i])))
+        if (hasNumeric) {
+          targetColIndex = i
+          break
+        }
+      }
+    }
+
+    if (targetColIndex === -1) {
+      console.warn('没有找到可用的数值列')
+      return
+    }
+
+    const xLabels = data.map((row, i) => {
+      if (timeColIndex >= 0 && row[timeColIndex]) {
+        return row[timeColIndex]
+      }
+      return `点${i + 1}`
+    })
+
     const numericValues = data
       .map(row => parseFloat(row[targetColIndex]))
       .filter(v => !isNaN(v))
-    
+
+    if (numericValues.length === 0) {
+      console.warn('没有找到有效的数值数据')
+      return
+    }
+
     const step = Math.max(1, Math.floor(numericValues.length / 12))
     const sampledData = []
+    const sampledLabels = []
     for (let i = 0; i < numericValues.length; i += step) {
       sampledData.push(numericValues[i])
+      sampledLabels.push(xLabels[i])
+    }
+
+    let originalData = null
+    let originalLabels = null
+    
+    if (originalProjectData.value && preprocessingResult.value) {
+      const origHeaders = originalProjectData.value.headers
+      const origData = originalProjectData.value.data
+      let origTargetIdx = origHeaders.indexOf(originalProjectData.value.targetCol)
+      let origTimeIdx = originalProjectData.value.timeCol ? origHeaders.indexOf(originalProjectData.value.timeCol) : -1
+
+      if (origTargetIdx === -1 && origData.length > 0) {
+        for (let i = 0; i < origHeaders.length; i++) {
+          const hasNumeric = origData.some(row => !isNaN(parseFloat(row[i])))
+          if (hasNumeric) {
+            origTargetIdx = i
+            break
+          }
+        }
+      }
+
+      if (origTargetIdx >= 0) {
+        originalLabels = origData.map((row, i) => {
+          if (origTimeIdx >= 0 && row[origTimeIdx]) {
+            return row[origTimeIdx]
+          }
+          return `点${i + 1}`
+        })
+        
+        const origValues = origData
+          .map(row => parseFloat(row[origTargetIdx]))
+          .filter(v => !isNaN(v))
+        
+        const origStep = Math.max(1, Math.floor(origValues.length / 12))
+        originalData = []
+        const origSampledLabels = []
+        for (let i = 0; i < origValues.length; i += origStep) {
+          originalData.push(origValues[i])
+          origSampledLabels.push(originalLabels[i])
+        }
+        originalLabels = origSampledLabels
+      }
     }
     
     let processedData = [...sampledData]
     
-    if (enabledStrategies.outlier) {
+    if (enabledStrategies.outlier && !preprocessingResult.value) {
       const mean = processedData.reduce((a, b) => a + b, 0) / processedData.length
       const variance = processedData.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / processedData.length
       const std = Math.sqrt(variance)
@@ -401,7 +583,7 @@ const initChart = () => {
       })
     }
     
-    if (enabledStrategies.noise) {
+    if (enabledStrategies.noise && !preprocessingResult.value) {
       const windowSize = 3
       const smoothed = []
       for (let i = 0; i < processedData.length; i++) {
@@ -413,38 +595,42 @@ const initChart = () => {
       processedData = smoothed
     }
     
+    const showOriginal = (enabledStrategies.resampling || enabledStrategies.missingValue || enabledStrategies.outlier || enabledStrategies.noise) && originalData
+    
+    const seriesList = [
+      ...(showOriginal ? [{
+        name: '原始序列',
+        type: 'line',
+        data: originalData,
+        lineStyle: { color: '#94a3b8', width: 2, type: 'dashed' },
+        symbol: 'circle',
+        symbolSize: 6
+      }] : []),
+      {
+        name: '处理后序列',
+        type: 'line',
+        data: processedData,
+        smooth: true,
+        lineStyle: { color: '#0052cc', width: 3 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: '#0052cc20' },
+            { offset: 1, color: '#0052cc05' }
+          ])
+        }
+      }
+    ]
+    
     chart.setOption({
       tooltip: { trigger: 'axis' },
-      grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+      grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true },
       xAxis: {
         type: 'category',
-        data: sampledData.map((_, i) => `点${i + 1}`),
-        axisLabel: { fontSize: 10 }
+        data: showOriginal ? originalLabels : sampledLabels,
+        axisLabel: { fontSize: 10, rotate: (showOriginal ? originalLabels[0] : sampledLabels[0])?.length > 10 ? 45 : 0 }
       },
       yAxis: { type: 'value' },
-      series: [
-        {
-          name: '原始序列',
-          type: 'line',
-          data: sampledData.slice(0, 6).concat([null, null, null, null, null, null]),
-          lineStyle: { color: '#94a3b8', width: 2, type: 'dashed' },
-          symbol: 'circle',
-          symbolSize: 6
-        },
-        {
-          name: '清洗后序列',
-          type: 'line',
-          data: processedData,
-          smooth: true,
-          lineStyle: { color: '#0052cc', width: 3 },
-          areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: '#0052cc20' },
-              { offset: 1, color: '#0052cc05' }
-            ])
-          }
-        }
-      ]
+      series: seriesList
     })
   }
 }
@@ -456,7 +642,7 @@ const handleCancel = () => {
 const goHome = () => {
   showConfirmDialog.value = false
   resetState()
-  router.push('/')
+  router.push('/dashboard')
 }
 
 const resetState = () => {
@@ -472,7 +658,18 @@ const resetState = () => {
   }
 }
 
-const confirmCancel = () => {
+const confirmCancel = async () => {
+  localStorage.setItem('lastPage', '/preprocessing')
+  
+  const projectId = localStorage.getItem('currentProjectId')
+  if (projectId) {
+    try {
+      await api.patch(`/projects/${projectId}`, { status: 'preprocessing' })
+    } catch (error) {
+      console.error('更新项目状态失败:', error)
+    }
+  }
+  
   const dataToSave = {
     fileName: projectData.value?.fileName || '未命名项目',
     timeCol: projectData.value?.timeCol || '',
@@ -484,7 +681,7 @@ const confirmCancel = () => {
   
   const history = JSON.parse(localStorage.getItem('historyRecords') || '[]')
   const newRecord = {
-    id: Date.now(),
+    id: projectId || Date.now(),
     name: dataToSave.fileName || '未命名项目',
     time: new Date().toLocaleString('zh-CN'),
     type: '数据分析',
@@ -497,29 +694,77 @@ const confirmCancel = () => {
   
   showConfirmDialog.value = false
   resetState()
-  router.push('/')
+  router.push('/dashboard')
 }
 
-const handleExport = () => {
-  const enabledList = []
-  if (enabledStrategies.resampling) enabledList.push(`重采样(${selectedOptions.resampling})`)
-  if (enabledStrategies.missingValue) enabledList.push(`缺失值插补(${selectedOptions.missingValue})`)
-  if (enabledStrategies.outlier) enabledList.push(`异常值检测(${selectedOptions.outlier})`)
-  if (enabledStrategies.noise) enabledList.push(`噪声处理(${selectedOptions.noise})`)
+const handleExport = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
   
-  const content = `预处理配置\n==========\n\n已启用的策略：\n${enabledList.length > 0 ? enabledList.map((item, i) => `${i + 1}. ${item}`).join('\n') : '无'}\n\n配置详情：\n- 重采样：${selectedOptions.resampling}\n- 缺失值：${selectedOptions.missingValue}\n- 异常值检测：${selectedOptions.outlier}\n- 异常值处理：${selectedOptions.outlierMethod}\n- 噪声处理：${selectedOptions.noise}\n\n数据统计：\n- 缺失率：${missingRate.value}%\n- 异常值数：${outlierCount.value}\n- 数据行数：${dataRowCount.value}`
-  
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = '预处理配置.txt'
-  a.click()
-  URL.revokeObjectURL(url)
+  if (projectId) {
+    try {
+      const response = await api.get(`/projects/${projectId}/preprocessing/download`, {
+        responseType: 'blob'
+      })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', 'processed_data.csv')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('下载失败:', error)
+    }
+  } else {
+    const enabledList = []
+    if (enabledStrategies.resampling) enabledList.push(`重采样(${selectedOptions.resampling})`)
+    if (enabledStrategies.missingValue) enabledList.push(`缺失值插补(${selectedOptions.missingValue})`)
+    if (enabledStrategies.outlier) enabledList.push(`异常值检测(${selectedOptions.outlier})`)
+    if (enabledStrategies.noise) enabledList.push(`噪声处理(${selectedOptions.noise})`)
+    
+    const content = `预处理配置
+==========
+
+已启用的策略：
+${enabledList.length > 0 ? enabledList.map((item, i) => `${i + 1}. ${item}`).join('\n') : '无'}
+
+配置详情：
+- 重采样：${selectedOptions.resampling}
+- 缺失值：${selectedOptions.missingValue}
+- 异常值检测：${selectedOptions.outlier}
+- 异常值处理：${selectedOptions.outlierMethod}
+- 噪声处理：${selectedOptions.noise}
+
+数据统计：
+- 缺失率：${missingRate.value}%
+- 异常值数：${outlierCount.value}
+- 数据行数：${dataRowCount.value}`
+    
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = '预处理配置.txt'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 }
 
-const handleSaveAndNext = () => {
+const handleSaveAndNext = async () => {
   savePreprocessingOptions()
+  
+  const projectId = localStorage.getItem('currentProjectId')
+  if (projectId) {
+    try {
+      await api.patch(`/projects/${projectId}`, {
+        status: 'preprocessing'
+      })
+    } catch (error) {
+      console.error('更新项目状态失败:', error)
+    }
+  }
+  
   router.push('/feature-engineering')
 }
 

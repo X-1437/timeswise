@@ -224,10 +224,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import MainLayout from '../layouts/MainLayout.vue'
+import api from '../api/index'
 
 const router = useRouter()
 
@@ -242,6 +243,7 @@ const showFullscreen = ref(false)
 const showToast = ref(false)
 const toastMessage = ref('')
 const reportDate = ref('')
+const loading = ref(false)
 
 const dataInfo = ref({
   rowCount: 0,
@@ -249,6 +251,8 @@ const dataInfo = ref({
   targetCol: '-',
   timeCol: '-'
 })
+
+const reportResult = ref(null)
 
 const showNotification = (message) => {
   toastMessage.value = message
@@ -258,7 +262,36 @@ const showNotification = (message) => {
   }, 3000)
 }
 
-const loadData = () => {
+const loadData = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  
+  if (projectId) {
+    try {
+      const response = await api.get(`/projects/${projectId}`)
+      const data = response.data
+      hasData.value = true
+      dataInfo.value = {
+        rowCount: data.data_config?.total_rows || 0,
+        colCount: data.columns?.length || 0,
+        targetCol: data.data_config?.target_column || '-',
+        timeCol: data.data_config?.time_column || '-'
+      }
+    } catch (error) {
+      console.error('获取项目数据失败:', error)
+      loadLocalData()
+    }
+  } else {
+    loadLocalData()
+  }
+  
+  reportDate.value = new Date().toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+const loadLocalData = () => {
   const savedData = localStorage.getItem('projectData')
   if (savedData) {
     const data = JSON.parse(savedData)
@@ -270,14 +303,46 @@ const loadData = () => {
       timeCol: data.timeCol || '-'
     }
   }
-  reportDate.value = new Date().toLocaleDateString('zh-CN', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  })
 }
 
-const downloadReport = () => {
+const downloadReport = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  
+  if (projectId) {
+    try {
+      loading.value = true
+      const response = await api.post(`/projects/${projectId}/report`, {
+        modules: ['overview', 'eda', 'preprocessing', 'features', 'forecast']
+      })
+      
+      reportResult.value = response.data
+      
+      const downloadResponse = await api.get(`/projects/${projectId}/report/${response.data.report_id}/download`, {
+        responseType: 'blob'
+      })
+      
+      const url = window.URL.createObjectURL(new Blob([downloadResponse.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `时间序列分析报告_${new Date().toISOString().split('T')[0]}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      
+      showNotification('报告下载成功！')
+    } catch (error) {
+      console.error('报告生成失败:', error)
+      downloadLocalReport()
+    } finally {
+      loading.value = false
+    }
+  } else {
+    downloadLocalReport()
+  }
+}
+
+const downloadLocalReport = () => {
   const reportContent = `
 时间序列预测分析报告
 ===================
@@ -325,7 +390,33 @@ const downloadReport = () => {
   showNotification('报告下载成功！')
 }
 
-const downloadCSV = () => {
+const downloadCSV = async () => {
+  const projectId = localStorage.getItem('currentProjectId')
+  
+  if (projectId) {
+    try {
+      const response = await api.get(`/projects/${projectId}/data`, {
+        responseType: 'blob'
+      })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', 'processed_data.csv')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      showNotification('CSV文件下载成功！')
+    } catch (error) {
+      console.error('下载失败:', error)
+      downloadLocalCSV()
+    }
+  } else {
+    downloadLocalCSV()
+  }
+}
+
+const downloadLocalCSV = () => {
   const savedData = localStorage.getItem('projectData')
   if (!savedData) {
     showNotification('暂无数据可下载')
@@ -392,28 +483,45 @@ TimeWise 时间序列分析报告
   }
 }
 
-const finishAndReturnHome = () => {
-  const savedData = localStorage.getItem('projectData')
-  if (savedData) {
-    const data = JSON.parse(savedData)
-    const history = JSON.parse(localStorage.getItem('historyRecords') || '[]')
-    const newRecord = {
-      id: Date.now(),
-      name: data.fileName || '未命名项目',
-      time: new Date().toLocaleString('zh-CN'),
-      type: '数据分析',
-      status: '已完成',
-      data: data,
-      currentStep: 6
+const finishAndReturnHome = async () => {
+  showNotification('正在保存...')
+  
+  const projectId = localStorage.getItem('currentProjectId')
+  
+  if (projectId) {
+    try {
+      await api.patch(`/projects/${projectId}`, {
+        status: 'completed'
+      })
+    } catch (error) {
+      console.error('更新项目状态失败:', error)
     }
-    history.unshift(newRecord)
-    localStorage.setItem('historyRecords', JSON.stringify(history))
   }
   
-  showNotification('进度已保存！')
+  const savedData = localStorage.getItem('projectData')
+  if (savedData) {
+    try {
+      const data = JSON.parse(savedData)
+      const history = JSON.parse(localStorage.getItem('historyRecords') || '[]')
+      const newRecord = {
+        id: Date.now(),
+        name: data.fileName || '未命名项目',
+        time: new Date().toLocaleString('zh-CN'),
+        type: '数据分析',
+        status: '已完成',
+        data: data,
+        currentStep: 6
+      }
+      history.unshift(newRecord)
+      localStorage.setItem('historyRecords', JSON.stringify(history))
+    } catch (e) {
+      console.error('保存失败:', e)
+    }
+  }
+  
   setTimeout(() => {
-    router.push('/dashboard')
-  }, 1000)
+    window.location.href = '/dashboard'
+  }, 500)
 }
 
 const zoomIn = () => {
@@ -533,6 +641,12 @@ const handleResize = () => {
   chart?.resize()
   fullscreenChart?.resize()
 }
+
+watch(hasData, (newVal) => {
+  if (newVal) {
+    initChart()
+  }
+})
 
 onMounted(() => {
   loadData()

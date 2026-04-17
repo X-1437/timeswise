@@ -59,6 +59,18 @@ const routes = [
     meta: { step: 4, requiresAuth: true }
   },
   {
+    path: '/feature-engineering/time',
+    name: 'TimeFeatures',
+    component: () => import('../views/TimeFeatures.vue'),
+    meta: { step: 4, requiresAuth: true }
+  },
+  {
+    path: '/feature-engineering/freq',
+    name: 'FreqFeatures',
+    component: () => import('../views/FreqFeatures.vue'),
+    meta: { step: 5, requiresAuth: true }
+  },
+  {
     path: '/forecasting',
     name: 'Forecasting',
     component: () => import('../views/Forecasting.vue'),
@@ -78,11 +90,11 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
-  const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true'
+  const token = localStorage.getItem('token')
   
-  if (to.meta.requiresAuth && !isLoggedIn) {
+  if (to.meta.requiresAuth && !token) {
     next('/login')
-  } else if ((to.path === '/login' || to.path === '/register') && isLoggedIn) {
+  } else if (token && (to.path === '/login' || to.path === '/register')) {
     next('/dashboard')
   } else {
     next()

@@ -2,10 +2,10 @@
   <div class="flex flex-col min-h-screen font-sans">
     <header class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-3 sticky top-0 z-50">
       <div class="flex items-center gap-4">
-        <div class="text-primary flex items-center cursor-pointer" @click="$router.push('/')">
+        <div class="text-primary flex items-center cursor-pointer" @click="$router.push('/dashboard')">
           <span class="material-symbols-outlined text-3xl">query_stats</span>
         </div>
-        <h2 class="text-xl font-bold tracking-tight text-primary cursor-pointer" @click="$router.push('/')">TimeWise</h2>
+        <h2 class="text-xl font-bold tracking-tight text-primary cursor-pointer" @click="$router.push('/dashboard')">TimeWise</h2>
       </div>
       <div class="flex items-center gap-4">
         <button class="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-primary/10 hover:text-primary transition-colors">

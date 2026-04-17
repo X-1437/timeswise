@@ -24,8 +24,10 @@
                 v-model="form.username" 
                 type="text" 
                 required
+                minlength="4"
+                maxlength="20"
                 class="w-full px-4 py-3 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-colors"
-                placeholder="请输入用户名"
+                placeholder="请输入用户名（4-20位）"
               />
             </div>
             
@@ -46,8 +48,9 @@
                 v-model="form.password" 
                 type="password" 
                 required
+                minlength="8"
                 class="w-full px-4 py-3 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-colors"
-                placeholder="请输入密码"
+                placeholder="请输入密码（8位以上）"
               />
             </div>
             
@@ -62,11 +65,20 @@
               />
             </div>
             
+            <div v-if="errorMessage" class="text-red-500 text-sm text-center">
+              {{ errorMessage }}
+            </div>
+            
+            <div v-if="successMessage" class="text-green-500 text-sm text-center">
+              {{ successMessage }}
+            </div>
+            
             <button 
               type="submit"
-              class="w-full py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20"
+              :disabled="loading"
+              class="w-full py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              注册
+              {{ loading ? '注册中...' : '注册' }}
             </button>
           </form>
           
@@ -87,6 +99,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import api from '../api/index'
 
 const router = useRouter()
 
@@ -97,8 +110,41 @@ const form = ref({
   confirmPassword: ''
 })
 
-const handleRegister = () => {
-  console.log('注册:', form.value)
-  router.push('/login')
+const loading = ref(false)
+const errorMessage = ref('')
+const successMessage = ref('')
+
+const handleRegister = async () => {
+  errorMessage.value = ''
+  successMessage.value = ''
+  
+  if (form.value.password !== form.value.confirmPassword) {
+    errorMessage.value = '两次输入的密码不一致'
+    return
+  }
+  
+  loading.value = true
+  
+  try {
+    const response = await api.post('/auth/register', {
+      username: form.value.username,
+      email: form.value.email,
+      password: form.value.password
+    })
+    
+    localStorage.setItem('token', response.data.token)
+    localStorage.setItem('username', response.data.user.username)
+    localStorage.setItem('isLoggedIn', 'true')
+    
+    router.push('/dashboard')
+  } catch (error) {
+    if (error.response?.data?.message) {
+      errorMessage.value = error.response.data.message
+    } else {
+      errorMessage.value = '注册失败，请稍后重试'
+    }
+  } finally {
+    loading.value = false
+  }
 }
 </script>

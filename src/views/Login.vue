@@ -40,11 +40,16 @@
               />
             </div>
             
+            <div v-if="errorMessage" class="text-red-500 text-sm text-center">
+              {{ errorMessage }}
+            </div>
+            
             <button 
               type="submit"
-              class="w-full py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20"
+              :disabled="loading"
+              class="w-full py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              登录
+              {{ loading ? '登录中...' : '登录' }}
             </button>
           </form>
           
@@ -65,6 +70,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import api from '../api/index'
 
 const router = useRouter()
 
@@ -73,10 +79,32 @@ const form = ref({
   password: ''
 })
 
-const handleLogin = () => {
-  console.log('登录:', form.value)
-  localStorage.setItem('isLoggedIn', 'true')
-  localStorage.setItem('username', form.value.username)
-  router.push('/dashboard')
+const loading = ref(false)
+const errorMessage = ref('')
+
+const handleLogin = async () => {
+  loading.value = true
+  errorMessage.value = ''
+  
+  try {
+    const response = await api.post('/auth/login', {
+      username: form.value.username,
+      password: form.value.password
+    })
+    
+    localStorage.setItem('token', response.data.token)
+    localStorage.setItem('username', response.data.user.username)
+    localStorage.setItem('isLoggedIn', 'true')
+    
+    router.push('/dashboard')
+  } catch (error) {
+    if (error.response?.data?.message) {
+      errorMessage.value = error.response.data.message
+    } else {
+      errorMessage.value = '登录失败，请检查用户名和密码'
+    }
+  } finally {
+    loading.value = false
+  }
 }
 </script>
