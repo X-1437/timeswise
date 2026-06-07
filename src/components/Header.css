@@ -1,0 +1,99 @@
+.app-header {
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background-color: rgba(247, 249, 251, 0.8);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--outline-variant);
+  z-index: 40;
+  position: sticky;
+  top: 0;
+  transition: all 0.3s;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.toggle-btn {
+  margin-right: 8px;
+}
+
+.header-title-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-app-name {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 24px;
+  color: var(--primary);
+  letter-spacing: -0.01em;
+}
+
+.header-divider {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--outline-variant);
+}
+
+.header-subtitle {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  color: var(--on-surface-variant);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-icon-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.header-icon-btn:hover {
+  background-color: var(--surface-container-high);
+  color: var(--on-surface);
+}
+
+.header-icon-btn .material-symbols-outlined {
+  font-size: 24px;
+}
+
+.notification-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  background-color: var(--error);
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+}
