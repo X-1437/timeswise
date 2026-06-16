@@ -6,7 +6,9 @@ import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { ResultPanel } from './components/ResultPanel'
 import { api } from './services/api'
-import type { Message, Session } from './types'
+import type { AssistantAction, Message, PreviewBlock, Session } from './types'
+
+const BACKEND_BASE_URL = 'http://localhost:8000'
 
 function App() {
   const [sessions, setSessions] = useState<Session[]>([])
@@ -36,6 +38,9 @@ function App() {
       backendSessionId: null,
       fileId: null,
       filename: null,
+      previewBlocks: [],
+      latestReportUrl: null,
+      pendingReportDownload: false,
     }
     setSessions((prev) => [newSession, ...prev])
     setCurrentSessionId(newSession.id)
@@ -108,7 +113,35 @@ function App() {
     return '新会话'
   }
 
-  const handleSendMessage = async (content: string) => {
+  const extractReportUrl = (text: string): string | null => {
+    const match = (text || '').match(/\/api\/v1\/sessions\/[^\s]+\/report\/download/g)
+    return match && match[0] ? match[0] : null
+  }
+
+  const toolTitle = (toolName?: string | null): string => {
+    switch (toolName) {
+      case 'upload_data':
+        return '文件确认'
+      case 'eda_analysis':
+        return 'EDA 分析'
+      case 'preprocessing':
+        return '数据清洗/预处理'
+      case 'feature_analysis':
+        return '特征分析'
+      case 'naive_forecast':
+        return '朴素预测'
+      case 'export_markdown':
+        return '分析报告'
+      default:
+        return toolName || '结果'
+    }
+  }
+
+  const handleSendMessage = async (
+    content: string,
+    options?: { autoDownloadReport?: boolean },
+    action?: AssistantAction | null
+  ) => {
     const targetSessionId = currentSessionId ?? createSession()
     const userMessage: Message = {
       id: generateId(),
@@ -132,22 +165,58 @@ function App() {
     try {
       const backendSessionId = sessionSnapshot?.backendSessionId ?? null
       const uploadedFileId = sessionSnapshot?.fileId ?? null
-      const response = await api.sendMessage(content, uploadedFileId, backendSessionId)
+      const response = await api.sendMessage(content, uploadedFileId, backendSessionId, action ?? null)
 
       const assistantMessage: Message = {
         id: generateId(),
         role: response.role,
         content: response.content,
         timestamp: new Date(),
+        actions: response.actions ?? null,
       }
 
       const finalMessages = [...newMessages, assistantMessage]
-      updateSession(targetSessionId, {
-        messages: finalMessages,
-        title: generateSessionTitle(finalMessages),
-        updatedAt: new Date(),
-        backendSessionId: response.session_id,
-      })
+
+      const nowIso = new Date().toISOString()
+      const toolName = response.tool_calls?.[0]?.tool_name ?? null
+      const reportUrl = extractReportUrl(response.content)
+
+      let previewTitle = response.actions && response.actions.length > 0 ? '需要确认' : toolTitle(toolName)
+      let previewMarkdown = response.content
+      if (reportUrl) {
+        const url = `${BACKEND_BASE_URL}${reportUrl}`
+        const md = await fetch(url).then((r) => r.text())
+        previewTitle = '分析报告'
+        previewMarkdown = md
+      }
+
+      const block: PreviewBlock = {
+        id: generateId(),
+        title: previewTitle,
+        markdown: previewMarkdown,
+        createdAt: nowIso,
+      }
+
+      if (options?.autoDownloadReport && reportUrl) {
+        window.open(`${BACKEND_BASE_URL}${reportUrl}`, '_blank', 'noopener,noreferrer')
+      }
+
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== targetSessionId) return s
+          const blocks = s.previewBlocks ?? []
+          return {
+            ...s,
+            messages: finalMessages,
+            title: generateSessionTitle(finalMessages),
+            updatedAt: new Date(),
+            backendSessionId: response.session_id,
+            previewBlocks: [...blocks, block],
+            latestReportUrl: reportUrl ? reportUrl : s.latestReportUrl ?? null,
+            pendingReportDownload: false,
+          }
+        })
+      )
     } catch (error) {
       const errorMessage: Message = {
         id: generateId(),
@@ -165,6 +234,11 @@ function App() {
     } finally {
       setIsSending(false)
     }
+  }
+
+  const handleAssistantAction = async (action: AssistantAction) => {
+    if (isSending) return
+    await handleSendMessage(action.label, undefined, action)
   }
 
   const handleFileUpload = async (file: File) => {
@@ -192,6 +266,9 @@ function App() {
         fileId: response.id,
         filename: response.filename,
         backendSessionId: response.session_id ?? sessionSnapshot?.backendSessionId ?? null,
+        previewBlocks: [],
+        latestReportUrl: null,
+        pendingReportDownload: false,
       })
     } catch (error) {
       const errorMessage: Message = {
@@ -210,6 +287,33 @@ function App() {
         updatedAt: new Date(),
       })
     }
+  }
+
+  const handleExportReport = async () => {
+    const targetSession = sessions.find((s) => s.id === currentSessionId)
+    if (!targetSession?.fileId) {
+      const sessionId = currentSessionId ?? createSession()
+      const currentMessages = sessions.find((s) => s.id === sessionId)?.messages || []
+      const assistantMessage: Message = {
+        id: generateId(),
+        role: 'assistant',
+        content: '请先上传 CSV 文件后再导出报告。',
+        timestamp: new Date(),
+      }
+      updateSession(sessionId, {
+        messages: [...currentMessages, assistantMessage],
+        updatedAt: new Date(),
+      })
+      return
+    }
+
+    const reportUrl = targetSession.latestReportUrl
+    if (reportUrl) {
+      window.open(`${BACKEND_BASE_URL}${reportUrl}`, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    await handleSendMessage('把这次分析导出成报告', { autoDownloadReport: true })
   }
 
   useEffect(() => {
@@ -260,7 +364,12 @@ function App() {
                 </div>
               )}
               {currentSession?.messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
+                <ChatMessage
+                  key={message.id}
+                  message={message}
+                  onAction={handleAssistantAction}
+                  actionsDisabled={isSending}
+                />
               ))}
               {isSending && (
                 <div className="loading-message">
@@ -294,7 +403,19 @@ function App() {
         />
       )}
 
-      <ResultPanel isOpen={isResultPanelOpen} onToggle={toggleResultPanel} width={resultPanelWidth} />
+      <ResultPanel
+        isOpen={isResultPanelOpen}
+        onToggle={toggleResultPanel}
+        width={resultPanelWidth}
+        currentFilename={currentSession?.filename ?? null}
+        previewBlocks={currentSession?.previewBlocks ?? []}
+        hasReport={Boolean(currentSession?.latestReportUrl)}
+        canDownloadReport={Boolean(currentSession?.fileId) && !isSending}
+        onDownloadReport={() => {
+          void handleExportReport()
+        }}
+        isDownloading={isSending}
+      />
     </div>
   )
 }

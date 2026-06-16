@@ -1,15 +1,19 @@
 import './ChatMessage.css'
-import type { Message } from '../types'
+import type { AssistantAction, Message } from '../types'
+import { MarkdownView } from './MarkdownView'
 
 interface ChatMessageProps {
   message: Message
+  onAction?: (action: AssistantAction) => void
+  actionsDisabled?: boolean
 }
 
-const ChatMessage = ({ message }: ChatMessageProps) => {
+const ChatMessage = ({ message, onAction, actionsDisabled = false }: ChatMessageProps) => {
   const isUser = message.role === 'user'
+  const actions = !isUser ? message.actions ?? null : null
 
   return (
-    <div className={`message ${isUser ? 'user-message' : 'assistant-message'}`}>
+    <div className={`chat-message ${isUser ? 'user' : 'assistant'}`}>
       <div className="message-avatar">
         {isUser ? '👤' : '🤖'}
       </div>
@@ -25,7 +29,24 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
             })}
           </span>
         </div>
-        <div className="message-text">{message.content}</div>
+        <div className="message-text">
+          <MarkdownView text={message.content} />
+        </div>
+        {actions && actions.length > 0 && (
+          <div className="message-actions">
+            {actions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="message-action-btn"
+                onClick={() => onAction?.(a)}
+                disabled={actionsDisabled}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

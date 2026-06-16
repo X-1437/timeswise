@@ -1,4 +1,4 @@
-import type { UploadFileResponse, ChatMessageResponse } from '../types'
+import type { UploadFileResponse, ChatMessageResponse, AssistantAction } from '../types'
 
 const API_BASE_URL = 'http://localhost:8000/api/v1'
 
@@ -37,7 +37,8 @@ export const api = {
   async sendMessage(
     content: string,
     fileId: string | null = null,
-    sessionId?: string | null
+    sessionId?: string | null,
+    action?: AssistantAction | null
   ): Promise<ChatMessageResponse> {
     const response = await fetch(`${API_BASE_URL}/chat/messages`, {
       method: 'POST',
@@ -48,6 +49,13 @@ export const api = {
         content,
         session_id: sessionId ?? null,
         fileId,
+        action: action
+          ? {
+              type: action.type,
+              tool_name: action.tool_name,
+              tool_args: action.tool_args,
+            }
+          : null,
       }),
     })
 
