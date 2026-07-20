@@ -184,7 +184,7 @@ function App() {
       let previewTitle = response.actions && response.actions.length > 0 ? '需要确认' : toolTitle(toolName)
       let previewMarkdown = response.content
       if (reportUrl) {
-        const url = `${BACKEND_BASE_URL}${reportUrl}`
+        const url = `${BACKEND_BASE_URL}${reportUrl}?format=md`
         const md = await fetch(url).then((r) => r.text())
         previewTitle = '分析报告'
         previewMarkdown = md

@@ -1,23 +1,49 @@
 import type { ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import './MarkdownView.css'
 
 const BASE_URL = 'http://localhost:8000'
 
-function linkify(text: string): ReactNode[] {
-  const pattern = /(https?:\/\/[^\s]+|\/api\/v1\/[^\s]+)/g
+function resolveUrl(url: string) {
+  return url.startsWith('/api/v1/') ? `${BASE_URL}${url}` : url
+}
+
+function renderInline(text: string): ReactNode[] {
+  // 处理内联 Markdown：**bold**、`code`、URL
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+|\/api\/v1\/[^\s)]+)/g
   const parts = text.split(pattern)
-  return parts.map((part, idx) => {
-    if (!part) return null
-    if (part.startsWith('http://') || part.startsWith('https://') || part.startsWith('/api/v1/')) {
-      const href = part.startsWith('/api/v1/') ? `${BASE_URL}${part}` : part
-      return (
-        <a key={idx} href={href} target="_blank" rel="noreferrer">
-          {part}
-        </a>
-      )
+  const matches = text.match(pattern) || []
+
+  const result: ReactNode[] = []
+  parts.forEach((part, idx) => {
+    if (part) {
+      result.push(<span key={`t-${idx}`}>{part}</span>)
     }
-    return <span key={idx}>{part}</span>
+    if (matches[idx]) {
+      const m = matches[idx]
+      if (m.startsWith('**') && m.endsWith('**')) {
+        // 加粗
+        result.push(<strong key={`b-${idx}`}>{m.slice(2, -2)}</strong>)
+      } else if (m.startsWith('`') && m.endsWith('`')) {
+        // 行内代码
+        result.push(<code key={`c-${idx}`} className="md-inline-code">{m.slice(1, -1)}</code>)
+      } else {
+        // URL（http/https 或 /api/v1/ 路径）
+        const href = resolveUrl(m)
+        result.push(
+          <a key={`a-${idx}`} href={href} target="_blank" rel="noreferrer">
+            {m}
+          </a>
+        )
+      }
+    }
   })
+
+  return result.length ? result : [<span key="empty">{text}</span>]
+}
+
+function linkify(text: string): ReactNode[] {
+  return renderInline(text)
 }
 
 function isTableHeader(line: string, nextLine: string | undefined) {
@@ -54,6 +80,16 @@ function headingLevel(line: string): number | null {
 export function MarkdownView({ text }: { text: string }) {
   const lines = (text || '').replace(/\r\n/g, '\n').split('\n')
   const nodes: ReactNode[] = []
+  const [modal, setModal] = useState<{ src: string; alt: string } | null>(null)
+
+  useEffect(() => {
+    if (!modal) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModal(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [modal])
 
   let i = 0
   while (i < lines.length) {
@@ -89,6 +125,35 @@ export function MarkdownView({ text }: { text: string }) {
         <Tag key={`h-${level}-${i}`} className={className}>
           {linkify(content)}
         </Tag>
+      )
+      i += 1
+      continue
+    }
+
+    const imgMatch = line.trim().match(/^!\[(.*?)]\((.*?)\)$/)
+    if (imgMatch) {
+      const alt = imgMatch[1] || 'image'
+      const src = resolveUrl(imgMatch[2] || '')
+      nodes.push(
+        <div key={`img-${i}`} className="md-img-wrap">
+          <img
+            className="md-img"
+            src={src}
+            alt={alt}
+            loading="lazy"
+            role="button"
+            tabIndex={0}
+            onClick={() => setModal({ src, alt })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setModal({ src, alt })
+            }}
+          />
+          <div className="md-img-actions">
+            <a href={src} target="_blank" rel="noreferrer">
+              在新标签页打开
+            </a>
+          </div>
+        </div>
       )
       i += 1
       continue
@@ -166,5 +231,29 @@ export function MarkdownView({ text }: { text: string }) {
     )
   }
 
-  return <div className="md-root">{nodes}</div>
+  return (
+    <div className="md-root">
+      {nodes}
+      {modal ? (
+        <div
+          className="md-img-modal"
+          role="dialog"
+          aria-label="图片预览"
+          onClick={() => setModal(null)}
+        >
+          <div className="md-img-modal-inner" onClick={(e) => e.stopPropagation()}>
+            <img className="md-img-modal-img" src={modal.src} alt={modal.alt} />
+            <div className="md-img-modal-actions">
+              <button className="md-img-modal-close" onClick={() => setModal(null)}>
+                关闭
+              </button>
+              <a href={modal.src} target="_blank" rel="noreferrer" className="md-img-modal-open">
+                在新标签页打开
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }
